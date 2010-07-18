@@ -4,15 +4,21 @@
 (declaim (optimize (speed 2) (debug 3) (safety 3)))
 
 (defconstant +k+ 2)
-(defconstant +big+ 1d12)
+(defconstant +big+ 12)
+;;(defconstant +max-component+ 2000)
+(deftype component ()
+  `(double-float))
 
 (deftype vec ()
-  `(simple-array double-float (,+k+)))
+  `(simple-array component (,+k+)))
 
-(defun v (&optional (x 0d0) (y 0d0) (z 0d0))
-  (declare (double-float x y)
+(declaim (inline v v- v+ v* v/ v. norm norm2))
+
+(defun v (&optional (x #.(coerce 0 'component))
+	  (y #.(coerce 0 'component)) (z #.(coerce 0 'component)))
+  (declare (component x y)
 	   (values vec &optional))
-  (make-array +k+ :element-type 'double-float
+  (make-array +k+ :element-type 'component
 	      :initial-contents (subseq (list x y z) 0 +k+)))
 
 (defmacro with-arrays (arrays &body body)
@@ -36,19 +42,13 @@ so that (ARRAY ...) corresponds to (AREF ARRAY ...)."
 	  ,@body)
 	,result-array))))
 #+nil
-(do-vec (i (a b) c)
-  (setf (c i) (+ (a i) (b i))))
-
+(do-vec (i (a b) c) (setf (c i) (+ (a i) (b i))))
 #+nil
-(do-vec (i () c)
-  (setf (c i) (+ (a i) (b i))))
+(do-vec (i () c) (setf (c i) (+ (a i) (b i))))
 #+nil
-(do-vec (i () )
-  (setf (c i) (+ (a i) (b i))))
-
+(do-vec (i ()) (setf (c i) (+ (a i) (b i))))
 #+nil
-(do-vec (i (b) )
-  (setf (c i) (+ (a i) (b i))))
+(do-vec (i (b) ) (setf (c i) (+ (a i) (b i))))
 
 (defun v+ (a b)
   (declare (vec a b)
@@ -64,27 +64,68 @@ so that (ARRAY ...) corresponds to (AREF ARRAY ...)."
 
 (defun v* (a s)
   (declare (vec a)
-	   (double-float s)
+	   (component s)
 	   (values vec &optional))
   (do-vec (i (a) c)
     (setf (c i) (* s (a i)))))
 
+(defun v/ (a s)
+  (declare (vec a)
+	   (component s)
+	   (values vec &optional))
+  ;; if we have defined the component type as some kind of float we
+  ;; can just multiply with the inverse. otherwise we want a fixnum
+  ;; result
+  (if #.(sb-kernel::subtypep 'component 'float)
+      (v* a (/ s))
+      (do-vec (i (a) c)
+	(setf (c i) (floor (a i) s)))))
+#+nil
+(v/ (v 5 2) 3)
+
 (defun v. (a b)
   (declare (vec a b)
-	   (values double-float &optional))
-  (let ((sum .0))
+	   (values component &optional))
+  (let ((sum #.(coerce 0 'component)))
     (do-vec (i (a b))
       (incf sum (* (a i) (b i))))
     sum))
 #+nil
-(v. (v .1) (v 2.0))
+(v. (v 1 3) (v 2 3))
+
+(defun norm2 (a)
+  (declare (vec a)
+	   (values component &optional))
+  (v. a a))
 
 (defun norm (a)
   (declare (vec a)
 	   (values double-float &optional))
-  (let ((a2 (v. a a)))
-    (declare ((double-float 0d0) a2))
-    (sqrt a2)))
+  (sqrt (* 1d0 (norm2 a))))
+
+(defun nearest-naive (points point)
+  (declare ((simple-array vec 1) points)
+	   (vec point)
+	   (values fixnum &optional))
+  (with-arrays (points)
+    (let* ((nearest 0)
+	   (nearest-dist2 (norm2 (v- (points nearest) point))))
+      (loop for i from 1 below (length points) do
+	   (let ((dist2 (norm2 (v- (points i) point))))
+	     (when (< dist2 nearest-dist2)
+	       (setf nearest i
+		     nearest-dist2 dist2))))
+      nearest)))
+;; 100000 2D points take 62 ms doesn't matter if component is small
+;; integer or double, 3D points take 200 ms
+#+nil
+(let* ((n 100000)
+	(a (make-array n :element-type 'vec
+		       :initial-contents (loop repeat n collect
+					      (v (random 20d0) (random 20d0)))))
+	(v (v 5d0 5d0 10d0)))
+   (time (nearest-naive a v)))
+
 
 (deftype axis ()
   `(member ,@(loop for i below (1- +k+) collect i)))
